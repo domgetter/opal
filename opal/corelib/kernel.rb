@@ -140,9 +140,7 @@ module Kernel
 
   alias to_enum enum_for
 
-  def equal?(other)
-    `self === other`
-  end
+  alias eql? ==
 
   def extend(*mods)
     %x{
@@ -437,6 +435,7 @@ module Kernel
   def private_methods(*)
     []
   end
+
   alias private_instance_methods private_methods
 
   def proc(&block)
@@ -479,6 +478,7 @@ module Kernel
       }
 
       #{$! = exception};
+
       throw exception;
     }
   end
@@ -582,4 +582,8 @@ module Kernel
   end
 
   alias untaint taint
+end
+
+class Object
+  include Kernel
 end

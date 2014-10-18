@@ -2,12 +2,12 @@ class Module
   def self.new(&block)
     %x{
       function AnonModule(){}
-      var klass      = Opal.boot(Opal.Module, AnonModule);
-      klass.$$name   = nil;
-      klass.$$class  = Opal.Module;
-      klass.$$dep    = []
-      klass.$$is_mod = true;
-      klass.$$proto  = {};
+      var klass         = Opal.boot(Opal.Module, AnonModule);
+      klass.$$name      = nil;
+      klass.$$class     = Opal.Module;
+      klass.$$dep       = []
+      klass.$$is_module = true;
+      klass.$$proto     = {};
 
       // inherit scope from parent
       Opal.create_scope(Opal.Module.$$scope, klass);
@@ -49,10 +49,11 @@ class Module
     %x{
       self.$$proto['$' + newname] = self.$$proto['$' + oldname];
 
-      if (self.$$methods) {
+      if (self.$$is_module) {
         Opal.donate(self, ['$' + newname ])
       }
     }
+
     self
   end
 
@@ -78,6 +79,7 @@ class Module
 
   def append_features(klass)
     `Opal.append_features(self, klass)`
+
     self
   end
 
@@ -88,20 +90,33 @@ class Module
 
   def attr_reader(*names)
     %x{
-      var proto = self.$$proto, cls = self;
-      for (var i = 0, length = names.length; i < length; i++) {
-        (function(name) {
-          proto[name] = nil;
-          var func = function() { return this[name] };
+      var proto = self.$$proto;
 
-          if (cls.$$is_singleton) {
-            proto.constructor.prototype['$' + name] = func;
+      for (var i = names.length - 1; i >= 0; i--) {
+        var name = names[i],
+            id   = '$' + name;
+
+        // the closure here is needed because name will change at the next
+        // cycle, I wish we could use let.
+        var body = (function(name) {
+          return function() {
+            return this[name];
+          };
+        })(name);
+
+        // initialize the instance variable as nil
+        proto[name] = nil;
+
+        if (self.$$is_singleton) {
+          proto.constructor.prototype[id] = body;
+        }
+        else {
+          proto[id] = body;
+
+          if (self.$$is_module) {
+            Opal.donate(self, [id]);
           }
-          else {
-            proto['$' + name] = func;
-            Opal.donate(self, ['$' + name ]);
-          }
-        })(names[i]);
+        }
       }
     }
 
@@ -110,22 +125,36 @@ class Module
 
   def attr_writer(*names)
     %x{
-      var proto = self.$$proto, cls = self;
-      for (var i = 0, length = names.length; i < length; i++) {
-        (function(name) {
-          proto[name] = nil;
-          var func = function(value) { return this[name] = value; };
+      var proto = self.$$proto;
 
-          if (cls.$$is_singleton) {
-            proto.constructor.prototype['$' + name + '='] = func;
+      for (var i = names.length - 1; i >= 0; i--) {
+        var name = names[i],
+            id   = '$' + name + '=';
+
+        // the closure here is needed because name will change at the next
+        // cycle, I wish we could use let.
+        var body = (function(name){
+          return function(value) {
+            return this[name] = value;
           }
-          else {
-            proto['$' + name + '='] = func;
-            Opal.donate(self, ['$' + name + '=']);
+        })(name);
+
+        // initialize the instance variable as nil
+        proto[name] = nil;
+
+        if (self.$$is_singleton) {
+          proto.constructor.prototype[id] = body;
+        }
+        else {
+          proto[id] = body;
+
+          if (self.$$is_module) {
+            Opal.donate(self, [id]);
           }
-        })(names[i]);
+        }
       }
     }
+
     nil
   end
 
@@ -178,15 +207,18 @@ class Module
 
     %x{
       var scopes = [self.$$scope];
+
       if (inherit || self == Opal.Object) {
         var parent = self.$$super;
+
         while (parent !== Opal.BasicObject) {
           scopes.push(parent.$$scope);
+
           parent = parent.$$super;
         }
       }
 
-      for (var i = 0, len = scopes.length; i < len; i++) {
+      for (var i = 0, length = scopes.length; i < length; i++) {
         if (scopes[i].hasOwnProperty(name)) {
           return scopes[i][name];
         }
@@ -212,7 +244,6 @@ class Module
     raise NameError, "uninitialized constant #{self}::#{const}"
   end
 
-
   def const_set(name, value)
     raise NameError, "wrong constant name #{name}" unless name =~ /^[A-Z]\w*$/
 
@@ -227,44 +258,50 @@ class Module
     value
   end
 
-  def define_method(name, method = undefined, &block)
+  def define_method(name, method = nil, &block)
+    unless method || block
+      raise ArgumentError, 'tried to create Proc object without a block'
+    end
+
+    if method
+      if Proc === method
+        block = method
+      else
+        raise TypeError, "wrong argument type #{method.class} (expected Proc/Method)"
+      end
+    end
+
     %x{
-      if (method) {
-        block = #{method.to_proc};
-      }
+      var id = '$' + name;
 
-      if (block === nil) {
-        throw new Error("no block given");
-      }
-
-      var jsid    = '$' + name;
       block.$$jsid = name;
       block.$$s    = null;
       block.$$def  = block;
 
-      self.$$proto[jsid] = block;
-      Opal.donate(self, [jsid]);
+      self.$$proto[id] = block;
+
+      if (self.$$is_module) {
+        Opal.donate(self, [id]);
+      }
 
       return name;
     }
   end
 
   def remove_method(name)
-    %x{
-      var jsid    = '$' + name;
-      var current = self.$$proto[jsid];
-      delete self.$$proto[jsid];
+    `Opal.undef(self, '$' + name)`
 
-      // Check if we need to reverse Opal.donate
-      // Opal.retire(self, [jsid]);
-      return self;
-    }
+    self
   end
 
   def include(*mods)
     %x{
       for (var i = mods.length - 1; i >= 0; i--) {
         var mod = mods[i];
+
+        if (!mod.$$is_module) {
+          #{raise TypeError, "wrong argument type #{`mod`.class} (expected Module)"};
+        }
 
         if (mod === self) {
           continue;
@@ -322,7 +359,7 @@ class Module
           continue;
         }
 
-        if (!self.$$is_mod) {
+        if (!self.$$is_module) {
           if (self !== Opal.BasicObject && proto[prop] === Opal.BasicObject.$$proto[prop]) {
             continue;
           }
@@ -414,7 +451,8 @@ class Module
         return self.$$full_name;
       }
 
-      var result = [], base = self;
+      var result = [],
+          base   = self;
 
       while (base) {
         if (base.$$name === nil) {
@@ -422,7 +460,6 @@ class Module
         }
 
         result.unshift(base.$$name);
-
         base = base.$$base_module;
 
         if (base === Opal.Object) {
@@ -449,12 +486,15 @@ class Module
   end
 
   alias private public
+
   alias protected public
+
   alias nesting public
 
   def private_class_method(name)
     `self['$' + name] || nil`
   end
+
   alias public_class_method private_class_method
 
   def private_method_defined?(obj)
@@ -482,7 +522,7 @@ class Module
   end
 
   def to_s
-    name || "#<#{`self.$$is_mod ? 'Module' : 'Class'`}:0x#{__id__.to_s(16)}>"
+    name || "#<#{`self.$$is_module ? 'Module' : 'Class'`}:0x#{__id__.to_s(16)}>"
   end
 
   def undef_method(symbol)

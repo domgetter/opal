@@ -148,15 +148,6 @@ module Opal
         fragment(result)
       end
 
-      # Generates code for this module to donate methods
-      def to_donate_methods
-        if should_donate? and !@methods.empty?
-          fragment("%s;Opal.donate(self, [%s]);" % [@compiler.parser_indent, @methods.map(&:inspect).join(', ')])
-        else
-          fragment("")
-        end
-      end
-
       def add_scope_ivar(ivar)
         if def_in_class?
           @parent.add_proto_ivar ivar

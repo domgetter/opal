@@ -99,13 +99,13 @@ module Opal
         if recvr
           unshift 'Opal.defs(', recv(recvr), ", '$#{mid}', "
           push ')'
-        elsif scope.class? and %w(Object BasicObject).include?(scope.name)
+        elsif scope.class? || scope.module?
           wrap "Opal.defn(self, '$#{mid}', ", ')'
         elsif scope.class_scope?
           scope.methods << "$#{mid}"
           unshift "#{scope.proto}#{jsid} = "
         elsif scope.iter?
-          wrap "Opal.defn(self, '$#{mid}', ", ')'
+          wrap "Opal.def(self, '$#{mid}', ", ')'
         elsif scope.type == :sclass
           unshift "self.$$proto#{jsid} = "
         elsif scope.top?
