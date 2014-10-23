@@ -212,6 +212,7 @@ class Module
     raise NameError, "uninitialized constant #{self}::#{const}"
   end
 
+
   def const_set(name, value)
     raise NameError, "wrong constant name #{name}" unless name =~ /^[A-Z]\w*$/
 
