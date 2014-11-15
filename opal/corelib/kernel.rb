@@ -1,8 +1,4 @@
 module Kernel
-  def method_missing(symbol, *args, &block)
-    raise NoMethodError, "undefined method `#{symbol}' for #{inspect}"
-  end
-
   def =~(obj)
     false
   end
@@ -296,7 +292,7 @@ module Kernel
   end
 
   def hash
-    `[self.$$class.$$name,#{`self.$$class`.__id__},#{__id__}].join(':')`
+    "#{self.class}:#{self.class.__id__}:#{__id__}"
   end
 
   def initialize_copy(other)
@@ -468,16 +464,20 @@ module Kernel
   def raise(exception = undefined, string = undefined)
     %x{
       if (exception == null && #$!) {
-        exception = #$!;
+        throw #$!;
+      }
+
+      if (exception == null) {
+        exception = #{RuntimeError.new};
       }
       else if (exception.$$is_string) {
         exception = #{RuntimeError.new exception};
       }
-      else if (!#{exception.is_a? Exception}) {
+      else if (exception.$$is_class) {
         exception = #{exception.new string};
       }
 
-      #{$! = exception};
+      #$! = exception;
 
       throw exception;
     }
@@ -549,7 +549,7 @@ module Kernel
   alias public_send __send__
 
   def singleton_class
-    %x{Opal.get_singleton_class(self)}
+    `Opal.singleton_class(self)`
   end
 
   alias sprintf format

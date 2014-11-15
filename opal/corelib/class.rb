@@ -1,6 +1,7 @@
 require 'corelib/module'
 
 class Class
+  # TODO: use runtime helpers
   def self.new(sup = Object, &block)
     %x{
       if (!sup.$$is_class) {

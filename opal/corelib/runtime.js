@@ -48,7 +48,7 @@
     var constant = this[name];
 
     if (constant == null) {
-      return this.base.$const_missing(name);
+      return this.base.$const_get(name);
     }
 
     return constant;
@@ -63,8 +63,8 @@
     var const_alloc = function() {};
     var const_scope = const_alloc.prototype = new base.constructor();
 
-    klass.$$scope       = const_scope;
-    klass.$$base_module = base.base;
+    klass.$$scope = const_scope;
+    klass.$$base  = base.base;
 
     const_scope.base        = klass;
     const_scope.constructor = const_alloc;
@@ -139,8 +139,12 @@
       boot_class_object(ObjectClass, superklass) :
       boot_class(superklass, constructor);
 
+
     // name class using base (e.g. Foo or Foo::Baz)
     klass.$$name = id;
+
+    // mark the object as a class
+    klass.$$is_class = true;
 
     // every class gets its own constant scope, inherited from current scope
     create_scope(base.$$scope, klass, id);
@@ -249,18 +253,8 @@
     // @property $$class the class of the class or module
     module.$$class = superklass;
 
-    // @property $$is_class marks this as a class
-    module.$$is_class = superklass !== ModuleClass;
-
-    // @property $$is_module marks this as a module
-    module.$$is_module = superklass === ModuleClass;
-
     // @property $$inc included modules
     module.$$inc = [];
-
-    if (module.$$is_module) {
-      module.$$dep = [];
-    }
   }
 
   // Define new module (or return existing module)
@@ -282,9 +276,19 @@
       return module;
     }
 
+    // boot the module
     module = boot_module_object();
+
+    // name module using base (e.g. Foo or Foo::Baz)
     module.$$name = id;
 
+    // mark the object as a module
+    module.$$is_module = true;
+
+    // initialize dependency tracking
+    module.$$dep = [];
+
+    // every module gets its own constant scope, inherited from current scope
     create_scope(base.$$scope, module, id);
 
     // Name new module directly onto current scope (Opal.Foo.Baz = module)
@@ -317,12 +321,12 @@
    *
    * @param object [Ruby Object]
    */
-  Opal.get_singleton_class = function(object) {
+  Opal.singleton_class = function(object) {
     if (object.$$meta) {
       return object.$$meta;
     }
 
-    if (object.$$is_class) {
+    if (object.$$is_class || object.$$is_module) {
       return build_class_singleton_class(object);
     }
 
@@ -516,8 +520,9 @@
 
     setup_module_or_class_object(klass, singleton_class, superclass, alloc.prototype);
 
-    klass.$$alloc = alloc;
-    klass.$$name  = id;
+    klass.$$alloc    = alloc;
+    klass.$$name     = id;
+    klass.$$is_class = true;
 
     // Give all instances a ref to their class
     alloc.prototype.$$class = klass;
@@ -576,18 +581,19 @@
   /*
    * constant assign
    */
-  Opal.casgn = function(base_module, name, value) {
-    var scope = base_module.$$scope;
+  Opal.casgn = function(base, name, value) {
+    var scope = base.$$scope;
 
-    if (value.$$is_class && value.$$name === nil) {
-      value.$$name = name;
-    }
+    if (value.$$is_class || value.$$is_module) {
+      value.$$base = base;
 
-    if (value.$$is_class) {
-      value.$$base_module = base_module;
+      if (value.$$name === nil) {
+        value.$$name = name;
+      }
     }
 
     scope.constants.push(name);
+
     return scope[name] = value;
   };
 
@@ -596,6 +602,7 @@
    */
   Opal.cdecl = function(base_scope, name, value) {
     base_scope.constants.push(name);
+
     return base_scope[name] = value;
   };
 
@@ -760,10 +767,15 @@
     var dispatcher;
 
     if (defs) {
-      dispatcher = obj.$$is_class ? defs.$$super : obj.$$class.$$proto;
+      if (obj.$$is_class || obj.$$is_module) {
+        dispatcher = defs.$$super;
+      }
+      else {
+        dispatcher = obj.$$class.$$proto;
+      }
     }
     else {
-      if (obj.$$is_class) {
+      if (obj.$$is_class || obj.$$is_module) {
         dispatcher = obj.$$super;
       }
       else {
@@ -793,7 +805,6 @@
 
     while (klass) {
       if (klass.$$proto[jsid] === current_func) {
-        // ok
         break;
       }
 
@@ -812,7 +823,6 @@
       var working = klass.$$proto[jsid];
 
       if (working && working !== current_func) {
-        // ok
         break;
       }
 
@@ -975,7 +985,7 @@
    * NOTE: used from `def method` calls inside blocks (i.e. Class.new)
    */
   Opal.def = function(obj, jsid, body) {
-    if (obj.$$is_class) {
+    if (obj.$$is_class || obj.$$is_module) {
       Opal.defn(obj, jsid, body);
     }
     else {
@@ -1039,6 +1049,52 @@
    */
   Opal.undef = function(obj, jsid) {
     delete obj.$$proto[jsid];
+  };
+
+  function wrap(body) {
+    var wrapped = function() {
+      body.$$p = wrapped.$$p;
+      body.$$s = wrapped.$$s;
+
+      return body.apply(this, arguments);
+    }
+
+    return wrapped;
+  }
+
+  Opal.alias = function(obj, name, old) {
+    var id = '$' + name;
+        body = obj.$$proto['$' + old];
+
+    if (typeof(body) !== "function" || body.$$stub) {
+      var ancestor = obj.$$super;
+
+      while (typeof(body) !== "function" && ancestor.$$super) {
+        body     = ancestor['$' + old];
+        ancestor = ancestor.$$super;
+      }
+
+      if (typeof(body) !== "function" || body.$$stub) {
+        throw Opal.NameError.$new("undefined method `" + old + "' for class `" + obj.$name() + "'")
+      }
+    }
+
+    Opal.defn(obj, id, wrap(body));
+
+    return obj;
+  };
+
+  Opal.alias_native = function(obj, name, old) {
+    var id   = '$' + name,
+        body = obj.$$proto['$' + old];
+
+    if (typeof(body) !== "function" || body.$$stub) {
+      throw Opal.NameError.$new("undefined method `" + old + "' for class `" + obj.$name() + "'")
+    }
+
+    Opal.defn(obj, id, wrap(body));
+
+    return obj;
   };
 
   Opal.hash = function() {

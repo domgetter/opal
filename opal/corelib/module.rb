@@ -1,4 +1,5 @@
 class Module
+  # TODO: reuse runtime helpers
   def self.new(&block)
     %x{
       function AnonModule(){}
@@ -46,19 +47,11 @@ class Module
   end
 
   def alias_method(newname, oldname)
-    %x{
-      self.$$proto['$' + newname] = self.$$proto['$' + oldname];
-
-      if (self.$$is_module) {
-        Opal.donate(self, ['$' + newname ])
-      }
-    }
-
-    self
+    `Opal.alias(self, newname, oldname)`
   end
 
   def alias_native(mid, jsid = mid)
-    `self.$$proto['$' + mid] = self.$$proto[jsid]`
+    `Opal.alias_native(self, mid, jsid)`
   end
 
   def ancestors
@@ -228,20 +221,20 @@ class Module
     }
   end
 
-  def const_missing(const)
+  def const_missing(name)
     %x{
       if (self.$$autoload) {
-        var file = self.$$autoload[#{const}];
+        var file = self.$$autoload[name];
 
         if (file) {
           self.$require(file);
 
-          return #{const_get const};
+          return #{const_get name};
         }
       }
     }
 
-    raise NameError, "uninitialized constant #{self}::#{const}"
+    raise NameError, "uninitialized constant #{self}::#{name}"
   end
 
   def const_set(name, value)
@@ -347,7 +340,7 @@ class Module
           proto   = self.$$proto;
 
       for (var prop in proto) {
-        if (!prop.charAt(0) === '$') {
+        if (prop.charAt(0) !== '$') {
           continue;
         }
 
@@ -460,7 +453,7 @@ class Module
         }
 
         result.unshift(base.$$name);
-        base = base.$$base_module;
+        base = base.$$base;
 
         if (base === Opal.Object) {
           break;
